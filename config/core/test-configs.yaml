@@ -1745,7 +1745,12 @@ test_configs:
       - baseline
       - baseline-nfs
       - cros-ec
-      - sleep
+      - igt-gpu-i915
+      - kselftest-lib
+      - ltp-crypto
+      - ltp-ipc
+      - ltp-mm
+      - sleep_mem
 
   - device_type: hsdk
     test_plans:
