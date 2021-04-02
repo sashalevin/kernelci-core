@@ -77,13 +77,13 @@ class cmd_validate(Command):
 
 class cmd_list_jobs(Command):
     help = "List all the jobs that need to be run for a given build and lab"
-    args = [Args.bmeta_json, Args.lab_config]
+    args = [Args.build_output, Args.lab_config]
     opt_args = [Args.dtbs_json, Args.user, Args.lab_token, Args.lab_json]
 
     def __call__(self, test_configs, lab_configs, args):
-        bmeta, dtbs = kernelci.build.load_json(args.bmeta_json, args.dtbs_json)
+        meta = kernelci.build.MetaStep(None, args.build_output)
 
-        if bmeta['status'] != "PASS":
+        if meta.get_value('build', 'status') != "PASS":
             return True
 
         lab = lab_configs['labs'][args.lab_config]
@@ -91,7 +91,7 @@ class cmd_list_jobs(Command):
             lab, args.user, args.lab_token, args.lab_json)
 
         configs = kernelci.test.match_configs(
-            test_configs['test_configs'], bmeta, dtbs, lab)
+            test_configs['test_configs'], meta, lab)
         for device_type, plan in configs:
             if not api.device_type_online(device_type):
                 continue
