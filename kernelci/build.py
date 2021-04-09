@@ -775,11 +775,20 @@ class Step:
 class MetaStep(Step):
     """Access the existing meta-data without running any actual step"""
 
-    def __init__(self, kdir, output_path=None):
-        super().__init__(kdir, output_path, 'meta')
-        self._bmeta['steps'] = self._steps
-        self._bmeta['artifacts'] = self._load_json(
-            self._artifacts_path, dict())
+    def __init__(self, install_path):
+        self._reset = False
+        self._bmeta, steps, artifacts = (self._load_json(
+            os.path.join(install_path, json_name), default)
+            for json_name, default in [
+                    ('bmeta.json', dict()),
+                    ('steps.json', list()),
+                    ('artifacts.json', dict()),
+            ]
+        )
+        self._bmeta.update({
+            'steps': steps,
+            'artifacts': artifacts,
+        })
 
     def get_value(self, *keys):
         """Find some meta-data value
