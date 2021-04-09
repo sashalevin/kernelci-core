@@ -803,6 +803,17 @@ class MetaStep(Step):
                 break
         return value
 
+    def get_single_artifact(self, name, key=None, attr=None):
+        artifacts = self.get_value('artifacts', name)
+        if artifacts:
+            if key:
+                art_map = {art['key']: art for art in artifacts}
+                artifact = art_map.get(key)
+            else:
+                artifact = artifacts[0]
+            return artifact.get(attr) if attr and artifact else artifact
+        return None
+
 
 class RevisionData(Step):
 
