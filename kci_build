@@ -307,7 +307,7 @@ or
             return False
 
         step = kernelci.build.RevisionData(args.kdir, args.output, reset=True)
-        print("Initialising build meta-data in {}".format(args.output))
+        print("Initialising build meta-data in {}".format(step.output_path))
         res = step.run(tree_name, tree_url, branch,
                        args.commit, args.describe, args.describe_verbose)
 
@@ -437,14 +437,14 @@ or
 
 class cmd_push_kernel(Command):
     help = "Push the kernel build artifacts"
-    args = [Args.kdir, Args.api, Args.db_token, Args.output]
-    opt_args = [Args.db_config]
+    args = [Args.kdir, Args.api, Args.db_token]
+    opt_args = [Args.db_config, Args.output]
 
     def __call__(self, configs, args):
-        install_path = os.path.join(args.output, '_install_') # FIXME
-        meta = kernelci.build.MetaStep(install_path)
-        publish_path = meta.get_value("kernel", "publish_path")
-        artifacts = kernelci.storage.discover_files(install_path)
+        install = kernelci.build.Step.get_install_path(args.kdir, args.output)
+        meta = kernelci.build.Metadata(install)
+        publish_path = meta.get('bmeta', 'kernel', 'publish_path')
+        artifacts = kernelci.storage.discover_files(install)
         print("Upload path: {}".format(publish_path))
         kernelci.storage.upload_files(
             args.api, args.db_token, publish_path, artifacts
