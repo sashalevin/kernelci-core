@@ -437,14 +437,15 @@ or
 
 class cmd_push_kernel(Command):
     help = "Push the kernel build artifacts"
-    args = [Args.kdir, Args.api, Args.db_token, Args.output]
-    opt_args = [Args.db_config]
+    args = [Args.kdir, Args.api, Args.db_token]
+    opt_args = [Args.db_config, Args.output]
 
     def __call__(self, configs, args):
-        install_path = os.path.join(args.output, '_install_') # FIXME
-        meta = kernelci.build.MetaStep(install_path)
+        meta = kernelci.build.MetaStep(args.kdir, args.output)
         publish_path = meta.get_value("kernel", "publish_path")
-        artifacts = kernelci.storage.discover_files(install_path)
+        print("install_path: {}".format(meta.install_path))
+        print("publish_path: {}".format(publish_path))
+        artifacts = kernelci.storage.discover_files(meta.install_path)
         print("Upload path: {}".format(publish_path))
         kernelci.storage.upload_files(
             args.api, args.db_token, publish_path, artifacts
