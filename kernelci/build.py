@@ -501,7 +501,95 @@ def _run_make(kdir, arch, target=None, jopt=None, silent=True, cc='gcc',
     return shell_cmd(cmd, True)
 
 
-class Step:
+class MetaStep:
+    def __init__(self, kdir, output_path=None, reset=False):
+        self._kdir = kdir
+        self._reset = reset
+        self._output_path = output_path or os.path.join(kdir, 'build')
+        if not os.path.exists(self._output_path):
+            os.mkdir(self._output_path)
+        self._install_path = os.path.join(self._output_path, '_install_')
+        self._create_install_dir()
+        self._bmeta_path = os.path.join(self._output_path, 'bmeta.json')
+        self._steps_path = os.path.join(self._output_path, 'steps.json')
+        self._artifacts_path = os.path.join(
+            self._install_path, 'artifacts.json')
+        self._bmeta = self._load_json(self._bmeta_path, dict())
+        self._steps = self._load_json(self._steps_path, list())
+        self._artifacts = dict()
+
+        self._hack_init()
+
+    @property
+    def install_path(self):
+        """Path to the installation directory"""
+        return self._install_path
+
+    def _hack_init(self):
+        self._hack, steps, artifacts = (self._load_json(
+            os.path.join(self._install_path, json_name), default)
+            for json_name, default in [
+                    ('bmeta.json', dict()),
+                    ('steps.json', list()),
+                    ('artifacts.json', dict()),
+            ]
+        )
+        self._hack.update({
+            'steps': steps,
+            'artifacts': artifacts,
+        })
+
+    def _create_install_dir(self):
+        if self._reset:
+            shutil.rmtree(self._install_path, ignore_errors=True)
+        if not os.path.exists(self._install_path):
+            os.makedirs(self._install_path)
+
+    def _load_json(self, json_path, default):
+        data = default
+        if os.path.exists(json_path):
+            if self._reset:
+                os.unlink(json_path)
+            else:
+                with open(json_path) as json_file:
+                    data = json.load(json_file)
+        return data
+
+    def get_value(self, *keys):
+        """Find some meta-data value
+
+        Without any argument, all the meta-data dictionary will be returned.
+        Otherwise, each argument will be used to look up the meta-data
+        recursively.  For example, to get the build status use
+        `.get_meta("build", "status")`.  If the key doesn't exist, None is
+        returned.
+
+        *keys* is an arbitary number of keys to look up the meta-data
+        """
+        if len(keys) == 0:
+            return self._hack
+        if len(keys) == 1:
+            return self._hack.get(keys[0])
+        value = self._hack
+        for key in keys:
+            value = value.get(key)
+            if value is None:
+                break
+        return value
+
+    def get_single_artifact(self, name, key=None, attr=None):
+        artifacts = self.get_value('artifacts', name)
+        if artifacts:
+            if key:
+                art_map = {art['key']: art for art in artifacts}
+                artifact = art_map.get(key)
+            else:
+                artifact = artifacts[0]
+            return artifact.get(attr) if attr and artifact else artifact
+        return None
+
+
+class Step(MetaStep):
     """Kernel build step"""
 
     def __init__(self, kdir, output_path=None, log=None, reset=False):
@@ -522,20 +610,7 @@ class Step:
               the format step-name.log where step-name is the Step.name value.
         *reset* is whether the meta-data should be reset in this step
         """
-        self._kdir = kdir
-        self._reset = reset
-        self._output_path = output_path or os.path.join(kdir, 'build')
-        if not os.path.exists(self._output_path):
-            os.mkdir(self._output_path)
-        self._install_path = os.path.join(self._output_path, '_install_')
-        self._create_install_dir()
-        self._bmeta_path = os.path.join(self._output_path, 'bmeta.json')
-        self._steps_path = os.path.join(self._output_path, 'steps.json')
-        self._artifacts_path = os.path.join(
-            self._install_path, 'artifacts.json')
-        self._bmeta = self._load_json(self._bmeta_path, dict())
-        self._steps = self._load_json(self._steps_path, list())
-        self._artifacts = dict()
+        super().__init__(kdir, output_path, reset)
         self._log_file = '.'.join([self.name, 'log']) if log is None else log
         self._log_path = os.path.join(self._output_path, self._log_file)
         if log is None and os.path.exists(self._log_path):
@@ -548,32 +623,11 @@ class Step:
         """Name of the step to use in logs and meta-data"""
         raise NotImplementedError("Step.name needs to be implemented.")
 
-    @property
-    def install_path(self):
-        """Path to the installation directory"""
-        return self._install_path
-
-    def _load_json(self, json_path, default):
-        data = default
-        if os.path.exists(json_path):
-            if self._reset:
-                os.unlink(json_path)
-            else:
-                with open(json_path) as json_file:
-                    data = json.load(json_file)
-        return data
-
     def _save_bmeta(self):
         with open(self._bmeta_path, 'w') as json_file:
             json.dump(self._bmeta, json_file, indent=4, sort_keys=True)
         with open(self._steps_path, 'w') as json_file:
             json.dump(self._steps, json_file, indent=4, sort_keys=True)
-
-    def _create_install_dir(self):
-        if self._reset:
-            shutil.rmtree(self._install_path, ignore_errors=True)
-        if not os.path.exists(self._install_path):
-            os.makedirs(self._install_path)
 
     def _add_run_step(self, status, jopt=None, action=''):
         start_time = datetime.fromtimestamp(self._start_time).isoformat()
@@ -776,57 +830,9 @@ class Step:
         return status
 
 
-class MetaStep(Step):
+class OFF_MetaStep(Step):
     """Access the existing meta-data without running any actual step"""
 
-    def __init__(self, kdir, output_path=None):
-        super().__init__(kdir, output_path)
-        self._reset = False
-        self._bmeta, steps, artifacts = (self._load_json(
-            os.path.join(install_path, json_name), default)
-            for json_name, default in [
-                    ('bmeta.json', dict()),
-                    ('steps.json', list()),
-                    ('artifacts.json', dict()),
-            ]
-        )
-        self._bmeta.update({
-            'steps': steps,
-            'artifacts': artifacts,
-        })
-
-    def get_value(self, *keys):
-        """Find some meta-data value
-
-        Without any argument, all the meta-data dictionary will be returned.
-        Otherwise, each argument will be used to look up the meta-data
-        recursively.  For example, to get the build status use
-        `.get_meta("build", "status")`.  If the key doesn't exist, None is
-        returned.
-
-        *keys* is an arbitary number of keys to look up the meta-data
-        """
-        if len(keys) == 0:
-            return self._bmeta
-        if len(keys) == 1:
-            return self._bmeta.get(keys[0])
-        value = self._bmeta
-        for key in keys:
-            value = value.get(key)
-            if value is None:
-                break
-        return value
-
-    def get_single_artifact(self, name, key=None, attr=None):
-        artifacts = self.get_value('artifacts', name)
-        if artifacts:
-            if key:
-                art_map = {art['key']: art for art in artifacts}
-                artifact = art_map.get(key)
-            else:
-                artifact = artifacts[0]
-            return artifact.get(attr) if attr and artifact else artifact
-        return None
 
 
 class RevisionData(Step):
