@@ -176,6 +176,18 @@ test_plans:
     params:
       job_timeout: '120'
 
+  kselftest-filesystems:
+    <<: *kselftest
+    params:
+      job_timeout: '10'
+      kselftest_collections: "filesystems"
+
+  kselftest-futex:
+    <<: *kselftest
+    params:
+      job_timeout: '10'
+      kselftest_collections: "futex"
+
   kselftest-lib:
     <<: *kselftest
     params:
@@ -1754,6 +1766,8 @@ test_configs:
       - baseline
       - baseline-nfs
       - kselftest
+      - kselftest-filesystems
+      - kselftest-futex
       - kselftest-lib
       - ltp-crypto
       - ltp-fcntl-locktests
@@ -2005,6 +2019,9 @@ test_configs:
     test_plans:
       - baseline
       - igt-gpu-i915
+      - kselftest-filesystems
+      - kselftest-futex
+      - kselftest-lib
 
   - device_type: mt8173-elm-hana
     test_plans:
