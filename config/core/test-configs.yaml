@@ -2095,15 +2095,24 @@ test_configs:
     test_plans:
       - baseline_qemu
       - baseline-qemu-docker
+      - kselftest-filesystems
+      - kselftest-futex
+      - kselftest-lib
       - v4l2-compliance-vivid
 
   - device_type: qemu_x86_64-uefi
     test_plans:
       - baseline_qemu
+      - kselftest-filesystems
+      - kselftest-futex
+      - kselftest-lib
 
   - device_type: qemu_x86_64-uefi-mixed
     test_plans:
       - baseline_qemu
+      - kselftest-filesystems
+      - kselftest-futex
+      - kselftest-lib
 
   - device_type: r8a774a1-hihope-rzg2m-ex
     test_plans:
