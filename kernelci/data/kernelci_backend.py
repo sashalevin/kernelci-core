@@ -1,4 +1,4 @@
-# Copyright (C) 2020 Collabora Limited
+# Copyright (C) 2020, 2021 Collabora Limited
 # Author: Michal Galka <michal.galka@collabora.com>
 # Author: Guillaume Tucker <guillaume.tucker@collabora.com>
 #
@@ -18,6 +18,7 @@
 
 import json
 import requests
+import urllib
 from kernelci.data import Database
 
 
@@ -27,14 +28,35 @@ class KernelCIBackend(Database):
         super().__init__(config, token)
         if self._token is None:
             raise ValueError("API token required for kernelci_backend")
+        self._headers = {'Authorization': self._token}
 
-    def submit(self, data, verbose=False):
-        resp = requests.post(self.config.url, json=json.loads(data),
-                             headers={'Authorization': self._token})
-        resp.raise_for_status()
+    def _submit(self, path, data, verbose):
+        url = urllib.parse.urljoin(self.config.url, path)
+        resp = requests.post(url, json=data, headers=self._headers)
+        try:
+            resp.raise_for_status()
+        except requests.exceptions.HTTPError as ex:
+            print(ex)
+            if verbose:
+                errors = json.loads(ex.response.content).get("errors", [])
+                for err in errors:
+                    print(err)
+            return False
         if verbose:
             print(resp.text)
         return True
+
+    def submit(self, data, verbose=False):
+        for path, item in data.items():
+            if not self._submit(path, item, verbose):
+                return False
+        return True
+
+    def submit_build(self, meta, verbose=False):
+        return self._submit('build', meta.get_value(), verbose)
+
+    def submit_test(self, results, verbose=False):
+        return self._submit('test', results, verbose)
 
 
 def get_db(config, token):

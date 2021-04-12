@@ -1,5 +1,6 @@
 # Copyright (C) 2020 Collabora Limited
 # Author: Michal Galka <michal.galka@collabora.com>
+# Author: Guillaume Tucker <guillaume.tucker@collabora.com>
 #
 # This module is free software; you can redistribute it and/or modify it under
 # the terms of the GNU Lesser General Public License as published by the Free
@@ -19,17 +20,56 @@ import importlib
 
 
 class Database:
+    """KernelCI database interface"""
 
     def __init__(self, config, token=None):
+        """Handle KernelCI data and communicate with any supported database
+
+        This abstract class provides an interface for exchanging data with a
+        database using an arbitrary implementation.  It also provides common
+        logic when applicable, to handle KernelCI data in a generic way.
+
+        *config* is the database configuration object
+        *token* is an authentication token for the database
+        """
         self._config = config
         self._token = token
 
-    def submit(self, data):
-        raise NotImplementedError("Database.submit() must be implemented")
-
     @property
     def config(self):
+        """Database configuration"""
         return self._config
+
+    def submit(self, data, verbose=False):
+        """Submit arbitrary data to the database
+
+        Primitive method to send some data to the database.
+
+        *data* is a dictionary with the data to send to the database
+        *verbose* is to print more information
+        """
+        raise NotImplementedError("Database.submit() must be implemented")
+
+    def submit_build(self, meta, verbose=False):
+        """Submit meta-data for a kernel build
+
+        Alternative entry point to submit the kernel build meta-data from a
+        build.MetaStep object.
+
+        *meta* is a kernelci.build.MetaStep object
+        *verbose* is to print more information
+        """
+        raise NotImplementedError("Database.submit_build() not implemented")
+
+    def submit_test(self, results, verbose=False):
+        """Submit test results
+
+        Alternative entry point to submit test results.
+
+        *results* is a dictionary with the test results data
+        *verbose* is to print more information
+        """
+        raise NotImplementedError("Database.submit_test() not implemented")
 
 
 def get_db(config, token=None):
