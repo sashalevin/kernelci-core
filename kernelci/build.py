@@ -378,13 +378,16 @@ def pull_tarball(kdir, url, dest_filename, retries, delete):
     return True
 
 
-def _add_frag_configs(kdir, frag_list, frag_paths, frag_configs):
+def _get_frag_configs(kdir, frag_list):
+    configs = set()
+    names = set()
     for frag in frag_list:
         if os.path.exists(os.path.join(kdir, frag.path)):
             if frag.defconfig:
-                frag_configs.add(frag.defconfig)
+                configs.add(frag.defconfig)
             else:
-                frag_paths.add(frag.path)
+                names.add(frag.name)
+    return configs, names
 
 
 def list_kernel_configs(config, kdir, single_variant=None, single_arch=None):
@@ -414,16 +417,17 @@ def list_kernel_configs(config, kdir, single_variant=None, single_arch=None):
         if single_variant and variant.name != single_variant:
             continue
         build_env = variant.build_environment.name
-        frag_paths = set()
-        frag_configs = set()
-        _add_frag_configs(kdir, variant.fragments, frag_paths, frag_configs)
+        frag_configs, frag_names = _get_frag_configs(kdir, variant.fragments)
+
         for arch in variant.architectures:
             if single_arch and arch.name != single_arch:
                 continue
-            frags = set(frag_paths)
+            frags = set(frag_names)
             defconfigs = set(frag_configs)
             defconfigs.add(arch.base_defconfig)
-            _add_frag_configs(kdir, arch.fragments, frags, defconfigs)
+            configs, names = _get_frag_configs(kdir, arch.fragments)
+            frags = frags.union(names)
+            defconfigs = defconfigs.union(configs)
             for frag in frags:
                 defconfigs.add('+'.join([arch.base_defconfig, frag]))
             defconfigs.update(arch.extra_configs)
@@ -500,6 +504,137 @@ def _run_make(kdir, arch, target=None, jopt=None, silent=True, cc='gcc',
     return shell_cmd(cmd, True)
 
 
+class Metadata:
+    def __init__(self, data_path, reset=False):
+        self._data_path = data_path
+        self._reset = reset
+        self._bmeta_path = os.path.join(self._data_path, 'bmeta.json')
+        self._steps_path = os.path.join(self._data_path, 'steps.json')
+        self._artifacts_path = os.path.join(self._data_path, 'artifacts.json')
+        self._bmeta = self._load_json(self._bmeta_path, dict())
+        self._steps = self._load_json(self._steps_path, list())
+        self._artifacts = self._load_json(self._artifacts_path, dict())
+        self._artifacts_map = {
+            step: {art['path']: art for art in artifacts}
+            for step, artifacts in self._artifacts.items()
+        }
+        self._data = {
+            'bmeta': self._bmeta,
+            'steps': self._steps,
+            'artifacts': self._artifacts,
+        }
+
+    @property
+    def bmeta_path(self):
+        return self._bmeta_path
+
+    @property
+    def steps_path(self):
+        return self._steps_path
+
+    @property
+    def artifacts_path(self):
+        return self._artifacts_path
+
+    def _load_json(self, json_path, default):
+        data = default
+        if os.path.exists(json_path):
+            if self._reset:
+                os.unlink(json_path)
+            else:
+                with open(json_path) as json_file:
+                    data = json.load(json_file)
+        return data
+
+    def save(self, save_artifacts=True):
+        with open(self._bmeta_path, 'w') as json_file:
+            json.dump(self._bmeta, json_file, indent=4, sort_keys=True)
+        with open(self._steps_path, 'w') as json_file:
+            json.dump(self._steps, json_file, indent=4, sort_keys=True)
+        if save_artifacts:
+            self.save_artifacts()
+
+    def get(self, *keys):
+        """Find some meta-data value
+
+        Without any argument, all the meta-data dictionary will be returned.
+        Otherwise, each argument will be used to look up the meta-data
+        recursively.  For example, to get the build status use
+        `.get('bmeta', 'build', 'status')`.  If the key doesn't exist, 'None'
+        is returned.
+
+        *keys* is an arbitary number of keys to look up the meta-data
+        """
+        if len(keys) == 0:
+            return self._data
+        if len(keys) == 1:
+            return self._data.get(keys[0])
+        value = self._data
+        for key in keys:
+            value = value.get(key)
+            if value is None:
+                break
+        return value
+
+    def add_step(self, data):
+        self._steps.append(data)
+        total_duration = sum(s['duration'] for s in self._steps)
+        all_status = set(s['status'] for s in self._steps)
+        self._bmeta['build'] = {
+            'duration': total_duration,
+            'status': 'PASS' if all_status == {'PASS'} else 'FAIL'
+        }
+
+    def clear_artifacts(self, step_name):
+        self._artifacts[step_name] = dict()
+
+    def _add_artifact(self, step_name, artifact_type, artifact_path,
+                     contents=None, key=None):
+        artifacts = self._artifacts_map.setdefault(step_name, dict())
+        entry = artifacts.get(artifact_path)
+        if entry is None:
+            entry = {
+                'type': artifact_type,
+                'path': artifact_path,
+            }
+            if key:
+                entry['key'] = key
+            if contents:
+                entry['contents'] = list(sorted(set(contents)))
+            artifacts[artifact_path] = entry
+        elif entry['type'] != artifact_type:
+            raise ValueError("Conflicting artifact types")
+        elif entry.get('key') != key:
+            raise ValueError("Conflicting artifact keys")
+        self._artifacts[step_name] = list(artifacts.values())
+        return entry
+
+    def add_artifact(self, step_name, directory, file_name, key=None):
+        path = os.path.join(directory, file_name)
+        return self._add_artifact(step_name, 'file', path, None, key)
+
+    def add_artifact_contents(self, step_name, artifact_type, path,
+                              contents, key=None):
+        return self._add_artifact(
+            step_name, artifact_type, path, contents, key)
+
+    def get_single_artifact(self, name, key=None, attr=None):
+        artifacts = self.get('artifacts', name)
+        if artifacts:
+            if key:
+                artifacts_map = {art['key']: art for art in artifacts}
+                artifact = artifacts_map.get(key)
+            else:
+                artifact = artifacts[0]
+            return artifact.get(attr) if attr and artifact else artifact
+        return None
+
+    def save_artifacts(self):
+        artifacts = {step: art for step, art in self._artifacts.items() if art}
+        with open(self._artifacts_path, 'w') as json_file:
+            json.dump(artifacts, json_file, indent=4, sort_keys=True)
+
+
 class Step:
     """Kernel build step"""
 
@@ -523,16 +658,13 @@ class Step:
         """
         self._kdir = kdir
         self._reset = reset
-        self._output_path = output_path or os.path.join(kdir, 'build')
+        self._output_path = output_path or self.get_default_output_path(kdir)
         if not os.path.exists(self._output_path):
             os.mkdir(self._output_path)
-        self._install_path = os.path.join(self._output_path, '_install_')
+        self._install_path = self.get_install_path(kdir, self._output_path)
         self._create_install_dir()
-        self._bmeta_path = os.path.join(self._output_path, 'bmeta.json')
-        self._steps_path = os.path.join(self._output_path, 'steps.json')
-        self._bmeta = self._load_json(self._bmeta_path, dict())
-        self._steps = self._load_json(self._steps_path, list())
-        self._artifacts = dict()
+        self._meta = Metadata(self._output_path, reset)
+        self._meta.clear_artifacts(self.name)
         self._log_file = '.'.join([self.name, 'log']) if log is None else log
         self._log_path = os.path.join(self._output_path, self._log_file)
         if log is None and os.path.exists(self._log_path):
@@ -546,25 +678,23 @@ class Step:
         raise NotImplementedError("Step.name needs to be implemented.")
 
     @property
+    def output_path(self):
+        return self._output_path
+
+    @property
     def install_path(self):
         """Path to the installation directory"""
         return self._install_path
 
-    def _load_json(self, json_path, default):
-        data = default
-        if os.path.exists(json_path):
-            if self._reset:
-                os.unlink(json_path)
-            else:
-                with open(json_path) as json_file:
-                    data = json.load(json_file)
-        return data
+    @classmethod
+    def get_default_output_path(cls, kdir):
+        return os.path.join(kdir, 'build')
 
-    def _save_bmeta(self):
-        with open(self._bmeta_path, 'w') as json_file:
-            json.dump(self._bmeta, json_file, indent=4, sort_keys=True)
-        with open(self._steps_path, 'w') as json_file:
-            json.dump(self._steps, json_file, indent=4, sort_keys=True)
+    @classmethod
+    def get_install_path(cls, kdir, output_path=None):
+        if output_path is None:
+            output_path = cls.get_default_output_path(kdir)
+        return os.path.join(output_path, '_install_')
 
     def _create_install_dir(self):
         if self._reset:
@@ -586,15 +716,8 @@ class Step:
         if self._log_path and os.path.exists(self._log_path):
             run_data['log_file'] = self._log_file
         run_data['status'] = "PASS" if status is True else "FAIL"
-        self._steps.append(run_data)
-
-        total_duration = sum(s['duration'] for s in self._steps)
-        all_status = set(s['status'] for s in self._steps)
-        self._bmeta['build'] = {
-            'duration': total_duration,
-            'status': 'PASS' if all_status == {'PASS'} else 'FAIL'
-        }
-        self._save_bmeta()
+        self._meta.add_step(run_data)
+        self._meta.save(save_artifacts=False)
         return status
 
     def _get_cpus(self):
@@ -609,6 +732,13 @@ class Step:
                 ncpus = cpus.get(cpu, 0)
                 cpus[cpu] = ncpus + 1
         return cpus
+
+    def _add_artifact(self, directory, file_name, key=None):
+        return self._meta.add_artifact(self.name, directory, file_name, key)
+
+    def _add_artifact_contents(self, artifact_type, path, contents, key=None):
+        return self._meta.add_artifact_contents(
+            self.name, artifact_type, path, contents, key)
 
     def _kernel_config_enabled(self, config_name):
         dot_config = os.path.join(self._output_path, '.config')
@@ -631,7 +761,7 @@ class Step:
         return cmd
 
     def _get_make_opts(self, opts, make_path):
-        env = self._bmeta['environment']
+        env = self._meta.get('bmeta', 'environment')
         make_opts = env['make_opts'].copy()
         if opts:
             make_opts.update(opts)
@@ -704,21 +834,6 @@ class Step:
         shutil.copy(path, install_path)
         return dest_name
 
-    def _add_artifact(self, category, item):
-        items = self._artifacts.setdefault(category, set())
-        items.add(item)
-
-    def _update_artifacts_json(self):
-        artifacts_path = os.path.join(self._install_path, 'artifacts.json')
-        data = self._load_json(artifacts_path, dict())
-
-        for category, items in self._artifacts.items():
-            input_items = set(data.get(category, set()))
-            data[category] = list(sorted(input_items.union(items)))
-
-        with open(artifacts_path, 'w') as json_file:
-            json.dump(data, json_file, indent=4, sort_keys=True)
-
     def is_enabled(self):
         """Determine whether the step is enabled with the current kernel."""
         return True
@@ -739,16 +854,17 @@ class Step:
         """
         self._add_run_step(status, action='install')
         files = [
-            (self._bmeta_path, ''),
-            (self._steps_path, ''),
-            (self._log_path, 'logs'),
+            (self._meta.bmeta_path, '', ''),
+            (self._meta.steps_path, '', ''),
+            (self._log_path, 'logs', 'log'),
         ]
-        for file_name, dest_dir in files:
+        for file_name, dest_dir, key in files:
             if os.path.exists(file_name):
                 item = self._install_file(file_name, dest_dir, verbose=verbose)
                 if dest_dir:
-                    self._add_artifact(dest_dir, item)
-        self._update_artifacts_json()
+                    self._add_artifact(dest_dir, item, key)
+        self._meta.save_artifacts()
+        self._install_file(self._meta.artifacts_path, verbose=verbose)
         return status
 
 
@@ -758,7 +874,8 @@ class RevisionData(Step):
     def name(self):
         return 'revision'
 
-    def run(self, tree_name, tree_url, branch):
+    def run(self, tree_name, tree_url, branch,
+            commit=None, describe=None, describe_v=None):
         """Add all the meta-data related to the current kernel revision.
 
         This step retrieves the revision information from the current kernel
@@ -768,14 +885,24 @@ class RevisionData(Step):
         *tree_name* is the short name of the kernel tree e.g. mainline, next...
         *tree_url* is the URL of the remote Git repository for the tree
         *branch* is the name of the Git branch
+
+        Optional arguments:
+
+        *commit* is the Git commit checksum, if None it will be determined
+                 automatically
+        *describe* is the Git describe string, if None it will be determined
+                   automatically
+        *describe_v* is the Git describe "verbose" string, if None it will be
+                     determined automatically
         """
-        self._bmeta['revision'] = {
+        self._meta.get('bmeta')['revision'] = {
             'tree': tree_name,
             'url': tree_url,
             'branch': branch,
-            'describe': git_describe(tree_name, self._kdir),
-            'describe_v': git_describe_verbose(self._kdir),
-            'commit': head_commit(self._kdir),
+            'describe': describe or git_describe(tree_name, self._kdir),
+            # ToDo: consolidate describe and describe_verbose
+            'describe_verbose': describe_v or git_describe_verbose(self._kdir),
+            'commit': commit or head_commit(self._kdir),
         }
         return self._add_run_step(True)
 
@@ -806,7 +933,7 @@ class EnvironmentData(Step):
         make_opts.update(build_env.get_arch_opts(arch))
         platform_data = {'uname': platform.uname()}
 
-        self._bmeta['environment'] = {
+        self._meta.get('bmeta')['environment'] = {
             'arch': arch,
             'compiler': cc,
             'compiler_version': build_env.cc_version,
@@ -849,6 +976,17 @@ class MakeConfig(Step):
 
         return opts, configs, fragments, extras
 
+    def _expand_defconfig(self, defconfig, frags):
+        split = defconfig.split('+')
+        expanded = [split.pop(0)]
+        for part in split:
+            frag = frags.get(part)
+            if frag:
+                expanded.append(frag.path)
+            else:
+                expanded.append(part)
+        return '+'.join(expanded)
+
     def _gen_kci_frag(self, configs, fragments, name):
         kci_frag_path = os.path.join(self._output_path, name)
         with open(kci_frag_path, 'w') as kci_frag:
@@ -861,7 +999,7 @@ class MakeConfig(Step):
 
     def _merge_config(self, kci_frag_name, verbose=False):
         rel_path = os.path.relpath(self._output_path, self._kdir)
-        env = self._bmeta['environment']
+        env = self._meta.get('bmeta', 'environment')
         cc = env['compiler']
         cc_env = (
             "export LLVM=1" if cc.startswith('clang') else
@@ -888,7 +1026,7 @@ scripts/kconfig/merge_config.sh -O {output} '{base}' '{frag}' {redir}
             cmd = self._output_to_file(cmd, self._log_path, self._kdir)
         return shell_cmd(cmd, True)
 
-    def run(self, defconfig, jopt=None, verbose=False, frag='kernelci.config'):
+    def run(self, defconfig, frags_config, jopt=None, verbose=False):
         """Make the kernel config
 
         Make the kernel .config file using a number of options.  This will
@@ -901,23 +1039,37 @@ scripts/kconfig/merge_config.sh -O {output} '{base}' '{frag}' {redir}
         and fragments.
 
         *defconfig* is the defconfig name, e.g. defconfig, x86_64_defconfig...
+        *frags_config* is a dict with the Fragment configuration objects
         *jopt* is the `make -j` option which will default to `nproc + 2`
         *verbose* is whether the build output should be shown
-        *frag* is the name of the output kernel config fragment
         """
-        elements = defconfig.split('+')
+        defconfig_expanded = self._expand_defconfig(defconfig, frags_config)
+        elements = defconfig_expanded.split('+')
         target = elements.pop(0)
         kci_frag_name = None
         opts, configs, fragments, extras = self._parse_elements(elements)
 
         if configs or fragments:
-            kci_frag_name = frag
+            kci_frag_name = 'kernelci.config'
             self._gen_kci_frag(configs, fragments, kci_frag_name)
 
-        self._bmeta['kernel'] = {
+        bmeta = self._meta.get('bmeta')
+        rev, env = (bmeta[cat] for cat in ('revision', 'environment'))
+        publish_path = '/'.join(item.replace('/', '-') for item in [
+            rev['tree'],
+            rev['branch'],
+            rev['describe'],
+            env['arch'],
+            defconfig,
+            env['name'],
+        ])
+
+        bmeta['kernel'] = {
             'defconfig': target,
             'defconfig_full': defconfig,
+            'defconfig_expanded': defconfig_expanded,
             'defconfig_extras': extras,
+            'publish_path': publish_path,
         }
 
         res = self._make(target, jopt, verbose, opts)
@@ -925,7 +1077,7 @@ scripts/kconfig/merge_config.sh -O {output} '{base}' '{frag}' {redir}
         if res and kci_frag_name:
             # ToDo: treat kernelci.config as an implementation detail and list
             # the actual input config fragment files here instead
-            self._bmeta['kernel']['fragments'] = [kci_frag_name]
+            bmeta['kernel']['fragments'] = [kci_frag_name]
             res = self._merge_config(kci_frag_name, verbose)
 
         return self._add_run_step(res, jopt)
@@ -941,12 +1093,12 @@ scripts/kconfig/merge_config.sh -O {output} '{base}' '{frag}' {redir}
             os.path.join(self._output_path, '.config'), 'config',
             'kernel.config', verbose
         )
-        self._add_artifact('config', item)
-        for frag in self._bmeta['kernel'].get('fragments', list()):
+        self._add_artifact('config', item, 'config')
+        for frag in self._meta.get('bmeta', 'kernel').get('fragments', list()):
             item = self._install_file(
                 os.path.join(self._output_path, frag), 'config', frag, verbose
             )
-            self._add_artifact('config', item)
+            self._add_artifact('config', item, 'fragment')
         return super().install(verbose)
 
 
@@ -966,14 +1118,15 @@ class MakeKernel(Step):
         *jopt* is the `make -j` option which will default to `nproc + 2`
         *verbose* is whether the build output should be shown
         """
+        bmeta = self._meta.get('bmeta')
         if self._kernel_config_enabled('XIP_KERNEL'):
             target = 'xipImage'
         elif self._kernel_config_enabled('SYS_SUPPORTS_ZBOOT'):
             target = 'vmlinuz'
         else:
-            target = MAKE_TARGETS.get(self._bmeta['environment']['arch'])
+            target = MAKE_TARGETS.get(bmeta['environment']['arch'])
 
-        kbmeta = self._bmeta.setdefault('kernel', dict())
+        kbmeta = bmeta.setdefault('kernel', dict())
         if target:
             kbmeta['image'] = target
 
@@ -989,7 +1142,7 @@ class MakeKernel(Step):
         return self._add_run_step(res, jopt)
 
     def _find_kernel_images(self, image):
-        arch = self._bmeta['environment']['arch']
+        arch = self._meta.get('bmeta', 'environment', 'arch')
         boot_dir = os.path.join(self._output_path, 'arch', arch, 'boot')
         kimage_names = KERNEL_IMAGE_NAMES[arch]
         kimages = dict()
@@ -1011,11 +1164,8 @@ class MakeKernel(Step):
             text = shell_cmd('grep " _text" {}'.format(system_map)).split()[0]
             text_offset = int(text, 16) & (1 << 30)-1  # phys: cap at 1G
             item = self._install_file(system_map, 'kernel', file_name, verbose)
-            self._add_artifact('kernel', file_name)
-            kbmeta.update({
-                'system_map': file_name,
-                'text_offset': '0x{:08x}'.format(text_offset),
-            })
+            self._add_artifact('kernel', file_name, 'system_map')
+            kbmeta['text_offset'] = '0x{:08x}'.format(text_offset)
 
     def install(self, verbose=False):
         """Install the kernel image
@@ -1024,7 +1174,7 @@ class MakeKernel(Step):
 
         *verbose* is whether the build output should be shown
         """
-        kbmeta = self._bmeta['kernel']
+        kbmeta = self._meta.get('bmeta', 'kernel')
         image = kbmeta.get('image')
         kimages = self._find_kernel_images(image)
         res = bool(kimages)
@@ -1037,7 +1187,7 @@ class MakeKernel(Step):
                 image = sorted(kimages.keys())[0]
                 kbmeta['image'] = image
             self._install_file(kimages[image], 'kernel', image, verbose)
-            self._add_artifact('kernel', image)
+            self._add_artifact('kernel', image, 'image')
 
         return super().install(verbose, res)
 
@@ -1077,7 +1227,7 @@ class MakeModules(Step):
         if os.path.exists(self._mod_path):
             shutil.rmtree(self._mod_path)
         os.makedirs(self._mod_path)
-        cross_compile = self._bmeta['environment']['cross_compile']
+        cross_compile = self._meta.get('bmeta', 'environment', 'cross_compile')
         opts = {
             'INSTALL_MOD_PATH': os.path.abspath(self._mod_path),
             'INSTALL_MOD_STRIP': '1',
@@ -1092,18 +1242,17 @@ class MakeModules(Step):
                     os.path.basename(entry.name)
                     for entry in tarball
                 )
-                if path
+                if path and path.endswith('.ko')
             )))
         return modules
 
-    def _create_modules_tarball(self, verbose):
-        modules_tarball = 'modules.tar.xz'
+    def _create_modules_tarball(self, verbose, modules_tarball, compr='J'):
         modules_tarball_path = os.path.join(
             self._install_path, modules_tarball)
         if verbose:
             print("Creating {}".format(modules_tarball_path))
-        shell_cmd("tar -C{path} -cJf {tarball} .".format(
-            path=self._mod_path, tarball=modules_tarball_path))
+        shell_cmd("tar -C{path} -c{compr}f {tarball} .".format(
+            path=self._mod_path, compr=compr, tarball=modules_tarball_path))
         return modules_tarball_path
 
     def install(self, verbose=False, jopt=None):
@@ -1119,9 +1268,10 @@ class MakeModules(Step):
         res = self._make_modules_install(jopt, verbose)
 
         if res:
-            tarball = self._create_modules_tarball(verbose)
-            modules = self._get_modules_artifacts(tarball)
-            self._artifacts['modules'] = modules
+            tarball = 'modules.tar.xz'
+            tarball_path = self._create_modules_tarball(verbose, tarball)
+            modules = self._get_modules_artifacts(tarball_path)
+            self._add_artifact_contents('tarball', tarball, modules)
 
         return super().install(verbose, res)
 
@@ -1154,7 +1304,7 @@ class MakeDeviceTrees(Step):
         return self._add_run_step(res, jopt)
 
     def _install_dtbs(self, verbose):
-        arch = self._bmeta['environment']['arch']
+        arch = self._meta.get('bmeta', 'environment', 'arch')
         boot_dir = os.path.join(self._output_path, 'arch', arch, 'boot')
         dts_dir = os.path.join(boot_dir, 'dts')
         dtb_list = []
@@ -1188,7 +1338,7 @@ class MakeDeviceTrees(Step):
         *verbose* is whether the build output should be shown
         """
         dtb_list = self._install_dtbs(verbose)
-        self._artifacts['dtbs'] = dtb_list
+        self._add_artifact_contents('directory', 'dtbs', dtb_list)
         return super().install(verbose)
 
 
@@ -1204,7 +1354,9 @@ class MakeSelftests(Step):
         Return True if the kselftest config fragment is enabled in the build
         meta-data, or False otherwise.
         """
-        return 'kselftest' in self._bmeta['kernel']['defconfig_extras']
+        return 'kselftest' in self._meta.get(
+            'bmeta', 'kernel', 'defconfig_extras'
+        )
 
     def run(self, jopt=None, verbose=False):
         """Make the kernel selftests
@@ -1221,7 +1373,7 @@ class MakeSelftests(Step):
         }
         res = self._make('gen_tar', jopt, verbose, opts,
                          'tools/testing/selftests')
-        return self._add_run_step(jopt, res)
+        return self._add_run_step(res, jopt)
 
     def _get_kselftests(self, kselftest_tarball):
         with tarfile.open(kselftest_tarball, 'r:xz') as tarball:
@@ -1249,9 +1401,9 @@ class MakeSelftests(Step):
 
         res = os.path.exists(kselftest_tarball)
         if res:
-            self._install_file(kselftest_tarball, verbose=verbose)
+            tarball = self._install_file(kselftest_tarball, verbose=verbose)
             kselftests = self._get_kselftests(kselftest_tarball)
-            self._artifacts['kselftest'] = kselftests
+            self._add_artifact_contents('tarball', tarball, kselftests)
 
         return super().install(verbose, res)
 
