@@ -616,7 +616,7 @@ class Metadata:
             step_name, artifact_type, path, contents, key)
 
     def get_single_artifact(self, name, key=None, attr=None):
-        artifacts = self.get_value('artifacts', name)
+        artifacts = self.get('artifacts', name)
         if artifacts:
             if key:
                 artifacts_map = {art['key']: art for art in artifacts}

@@ -31,7 +31,8 @@ def match_configs(configs, meta, lab):
     provided kernel build meta-data and lab filters.
     """
     dtbs = meta.get_single_artifact('dtbs', attr='contents')
-    env, kernel, rev = (meta.get_value(key) for key in [
+    bmeta = meta.get('bmeta')
+    env, kernel, rev = (bmeta.get(key) for key in [
         'environment', 'kernel', 'revision'
     ])
     defconfig = kernel['defconfig_full']
@@ -77,7 +78,7 @@ def get_params(meta, target, plan_config, storage):
     *plan_config* is a TestPlan object for the test plan to run
     *storage* is the URL of the storage server
     """
-    kernel, rev = (meta.get_value(key) for key in ['kernel', 'revision'])
+    kernel, rev = (meta.get('bmeta', key) for key in ['kernel', 'revision'])
     arch = target.arch
     dtb = dtb_full = target.dtb
     if dtb:
@@ -145,7 +146,7 @@ def get_params(meta, target, plan_config, storage):
         'context': target.context,
         'rootfs_prompt': rootfs.prompt,
         'file_server_resource': publish_path,
-        'build_environment': meta.get_value('environment', 'name'),
+        'build_environment': meta.get('bmeta', 'environment', 'name'),
         'kselftests_url': kselftests_url,
     }
 

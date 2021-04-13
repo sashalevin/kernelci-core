@@ -81,9 +81,10 @@ class cmd_list_jobs(Command):
     opt_args = [Args.dtbs_json, Args.user, Args.lab_token, Args.lab_json]
 
     def __call__(self, test_configs, lab_configs, args):
-        meta = kernelci.build.MetaStep(args.build_output)
+        install = kernelci.build.Step.get_install_path(None, args.build_output)
+        meta = kernelci.build.Metadata(install)
 
-        if meta.get_value('build', 'status') != "PASS":
+        if meta.get('bmeta', 'build', 'status') != "PASS":
             return True
 
         lab = lab_configs['labs'][args.lab_config]
@@ -156,9 +157,10 @@ class cmd_generate(Command):
             print("--callback-url is required with --callback-id")
             return False
 
-        meta = kernelci.build.MetaStep(args.build_output)
+        install = kernelci.build.Step.get_install_path(None, args.build_output)
+        meta = kernelci.build.Metadata(install)
 
-        if meta.get_value('build', 'status') != "PASS":
+        if meta.get('bmeta', 'build', 'status') != "PASS":
             return True
 
         lab = lab_configs['labs'][args.lab_config]
