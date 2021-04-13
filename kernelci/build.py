@@ -510,8 +510,11 @@ class Metadata:
         self._artifacts_path = os.path.join(self._data_path, 'artifacts.json')
         self._bmeta = self._load_json(self._bmeta_path, dict())
         self._steps = self._load_json(self._steps_path, list())
-        # ToDo: use same format as stored in file to avoid translations
-        self._artifacts = self._load_artifacts()
+        self._artifacts = self._load_json(self._artifacts_path, dict())
+        self._artifacts_map = {
+            step: {art['path']: art for art in artifacts}
+            for step, artifacts in self._artifacts.items()
+        }
         self._data = {
             'bmeta': self._bmeta,
             'steps': self._steps,
@@ -539,13 +542,6 @@ class Metadata:
                 with open(json_path) as json_file:
                     data = json.load(json_file)
         return data
-
-    def _load_artifacts(self):
-        raw_artifacts = self._load_json(self._artifacts_path, dict())
-        return {
-            step: {art['path']: art for art in artifacts}
-            for step, artifacts in raw_artifacts.items()
-        }
 
     def save(self, save_artifacts=True):
         with open(self._bmeta_path, 'w') as json_file:
@@ -589,8 +585,9 @@ class Metadata:
     def clear_artifacts(self, step_name):
         self._artifacts[step_name] = dict()
 
-    def add_artifact(self, step_name, artifact_type, artifact_path, key=None):
-        artifacts = self.get('artifacts').setdefault(step_name, dict())
+    def _add_artifact(self, step_name, artifact_type, artifact_path,
+                     contents=None, key=None):
+        artifacts = self._artifacts_map.setdefault(step_name, dict())
         entry = artifacts.get(artifact_path)
         if entry is None:
             entry = {
@@ -599,12 +596,24 @@ class Metadata:
             }
             if key:
                 entry['key'] = key
+            if contents:
+                entry['contents'] = list(sorted(set(contents)))
             artifacts[artifact_path] = entry
         elif entry['type'] != artifact_type:
             raise ValueError("Conflicting artifact types")
         elif entry.get('key') != key:
             raise ValueError("Conflicting artifact keys")
+        self._artifacts[step_name] = list(artifacts.values())
         return entry
+
+    def add_artifact(self, step_name, directory, file_name, key=None):
+        path = os.path.join(directory, file_name)
+        return self._add_artifact(step_name, 'file', path, None, key)
+
+    def add_artifact_contents(self, step_name, artifact_type, path,
+                              contents, key=None):
+        return self._add_artifact(
+            step_name, artifact_type, path, contents, key)
 
     def get_single_artifact(self, name, key=None, attr=None):
         artifacts = self.get_value('artifacts', name)
@@ -618,16 +627,9 @@ class Metadata:
         return None
 
     def save_artifacts(self):
-        raw_artifacts = dict()
-        for step, artifacts in self._artifacts.items():
-            for entry in artifacts.values():
-                contents = entry.get('contents')
-                if contents:
-                    entry['contents'] = list(sorted(set(contents)))
-            if artifacts:
-                raw_artifacts[step] = list(artifacts.values())
+        artifacts = {step: art for step, art in self._artifacts.items() if art}
         with open(self._artifacts_path, 'w') as json_file:
-            json.dump(raw_artifacts, json_file, indent=4, sort_keys=True)
+            json.dump(artifacts, json_file, indent=4, sort_keys=True)
 
 
 class Step:
@@ -729,13 +731,11 @@ class Step:
         return cpus
 
     def _add_artifact(self, directory, file_name, key=None):
-        path = os.path.join(directory, file_name)
-        return self._meta.add_artifact(self.name, 'file', path, key)
+        return self._meta.add_artifact(self.name, directory, file_name, key)
 
     def _add_artifact_contents(self, artifact_type, path, contents, key=None):
-        entry = self._meta.add_artifact(self.name, artifact_type, path, key)
-        entry['contents'] = contents
-        return entry
+        return self._meta.add_artifact_contents(
+            self.name, artifact_type, path, contents, key)
 
     def _kernel_config_enabled(self, config_name):
         dot_config = os.path.join(self._output_path, '.config')
