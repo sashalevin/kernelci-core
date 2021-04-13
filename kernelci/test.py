@@ -108,7 +108,7 @@ def get_params(meta, target, plan_config, storage):
     defconfig = ''.join(defconfig_full.split('+')[:1])
     endian = 'big' if 'BIG_ENDIAN' in defconfig_full else 'little'
     describe = rev['describe']
-    kselftests = meta.get_single_artifact('kselftests', attr='path')
+    kselftests = meta.get_single_artifact('kselftest', attr='path')
     kselftests_url = (
         urllib.parse.urljoin(storage, '/'.join([url_px, kselftests]))
         if kselftests else None
