@@ -77,11 +77,20 @@ class cmd_validate(Command):
 
 class cmd_list_jobs(Command):
     help = "List all the jobs that need to be run for a given build and lab"
-    args = [Args.build_output, Args.lab_config]
-    opt_args = [Args.dtbs_json, Args.user, Args.lab_token, Args.lab_json]
+    args = [Args.lab_config]
+    opt_args = [Args.dtbs_json, Args.user, Args.lab_token, Args.lab_json,
+                Args.build_output, Args.install_path]
 
     def __call__(self, test_configs, lab_configs, args):
-        install = kernelci.build.Step.get_install_path(None, args.build_output)
+        path_args = (args.build_output, args.install_path)
+        if not any(path_args) or all(path_args):
+            print("Either --build-output or --install-path is required")
+            return False
+
+        install = (
+            args.install_path
+            or kernelci.build.Step.get_install_path(None, args.build_output)
+        )
         meta = kernelci.build.Metadata(install)
 
         if meta.get('bmeta', 'build', 'status') != "PASS":
@@ -157,7 +166,15 @@ class cmd_generate(Command):
             print("--callback-url is required with --callback-id")
             return False
 
-        install = kernelci.build.Step.get_install_path(None, args.build_output)
+        path_args = (args.build_output, args.install_path)
+        if not any(path_args) or all(path_args):
+            print("Either --build-output or --install-path is required")
+            return False
+
+        install = (
+            args.install_path
+            or kernelci.build.Step.get_install_path(None, args.build_output)
+        )
         meta = kernelci.build.Metadata(install)
 
         if meta.get('bmeta', 'build', 'status') != "PASS":
