@@ -218,6 +218,12 @@ test_plans:
       tst_cmdfiles: "mm"
       job_timeout: '30'
 
+  ltp-pty:
+    <<: *ltp
+    params:
+      <<: *ltp-params
+      tst_cmdfiles: "pty"
+
   ltp-timers:
     <<: *ltp
     pattern: 'ltp/{category}-{method}-{protocol}-{rootfs}-ltp-open-posix-template.jinja2'
@@ -1751,6 +1757,7 @@ test_configs:
       - kselftest-lib
       - ltp-crypto
       - ltp-fcntl-locktests
+      - ltp-pty
 
   - device_type: hp-11A-G6-EE-grunt
     test_plans:
@@ -2197,6 +2204,7 @@ test_configs:
       - ltp-fcntl-locktests
       - ltp-ipc
       - ltp-mm
+      - ltp-pty
       - ltp-timers
       - sleep
       - v4l2-compliance-uvc
