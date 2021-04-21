@@ -23,6 +23,7 @@ from kernelci.cli import Args, Command, parse_opts
 import kernelci
 import kernelci.build
 import kernelci.config.build
+import kernelci.storage
 
 
 class cmd_validate(Command):
@@ -282,6 +283,7 @@ class cmd_init_bmeta(Command):
     args = [Args.kdir]
     opt_args = [Args.output, Args.build_config, Args.install,
                 Args.tree_name, Args.tree_url, Args.branch,
+                Args.commit, Args.describe, Args.describe_verbose,
                 Args.build_env, Args.arch]
 
     def __call__(self, configs, args):
@@ -304,8 +306,15 @@ or
             return False
 
         step = kernelci.build.RevisionData(args.kdir, args.output, reset=True)
-        print("Initialising build meta-data in {}".format(args.output))
-        res = step.run(tree_name, tree_url, branch)
+        print("Initialising build meta-data in {}".format(step.output_path))
+        res = step.run(opts={
+            'tree': tree_name,
+            'url': tree_url,
+            'branch': branch,
+            'commit': args.commit,
+            'describe': args.describe,
+            'describe_verbose': args.describe_verbose
+        })
 
         if args.install:
             print("Install directory: {}".format(step.install_path))
@@ -318,7 +327,7 @@ Invalid arguments, --build-env and --arch need to be used together.""")
                 return False
             build_env = configs['build_environments'][args.build_env]
             step = kernelci.build.EnvironmentData(args.kdir, args.output)
-            res = step.run(build_env, args.arch)
+            res = step.run(opts={'build_env': build_env, 'arch': args.arch})
             if args.install:
                 step.install()
 
@@ -335,7 +344,8 @@ class MakeCommand(Command):
         if not step.is_enabled():
             print("Not enabled, skipping.")
             return True
-        res = self._run_step(step, args)
+        opts = self._get_opts(args, configs)
+        res = step.run(args.j, args.verbose, opts)
         if args.install:
             install_res = self._install_step(step, args)
             res = res and install_res
@@ -346,8 +356,8 @@ class MakeCommand(Command):
             raise ValueError("Step class not defined.")
         return self.step_cls(args.kdir, args.output, args.log)
 
-    def _run_step(self, step, args):
-        return step.run(args.j, args.verbose)
+    def _get_opts(self, args, configs):
+        return dict()
 
     def _install_step(self, step, args):
         return step.install(args.verbose)
@@ -358,8 +368,11 @@ class cmd_make_config(MakeCommand):
     args = MakeCommand.args + [Args.defconfig]
     step_cls = kernelci.build.MakeConfig
 
-    def _run_step(self, step, args):
-        return step.run(args.defconfig, args.j, args.verbose)
+    def _get_opts(self, args, configs):
+        return {
+            'defconfig': args.defconfig,
+            'frags_config': configs['fragments'],
+        }
 
 
 class cmd_make_kernel(MakeCommand):
@@ -431,13 +444,20 @@ or
 
 
 class cmd_push_kernel(Command):
-    help = "Push the kernel binaries"
+    help = "Push the kernel build artifacts"
     args = [Args.kdir, Args.api, Args.db_token]
-    opt_args = [Args.install_path, Args.db_config]
+    opt_args = [Args.output, Args.db_config]
 
     def __call__(self, configs, args):
-        return kernelci.build.push_kernel(args.kdir, args.api, args.db_token,
-                                          args.install_path)
+        install = kernelci.build.Step.get_install_path(args.kdir, args.output)
+        meta = kernelci.build.Metadata(install)
+        publish_path = meta.get('bmeta', 'kernel', 'publish_path')
+        artifacts = kernelci.storage.discover_files(install)
+        print("Upload path: {}".format(publish_path))
+        kernelci.storage.upload_files(
+            args.api, args.db_token, publish_path, artifacts
+        )
+        return True
 
 
 class cmd_publish_kernel(Command):
